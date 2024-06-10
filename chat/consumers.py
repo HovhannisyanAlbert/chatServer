@@ -6,54 +6,28 @@ from .models import Room, Message, User
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        self.room_name = f"room_{
-            self.scope['url_route']['kwargs']['room_name']}"
-        await self.channel_layer.group_add(self.room_name, self.channel_name)
+        self.room_name = f"room_{self.scope['url_route']['kwargs']['room_name']}"
+        self.room_group_name = self.room_name
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, code):
-        await self.channel_layer.group_discard(self.room_name, self.channel_name)
-
-    async def chat_message(self, event):
-        event["timestamp"] = event["timestamp"].strftime('%Y-%m-%d %H:%M:%S')
-        await self.send(text_data=json.dumps(event))
+        await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
 
     async def receive(self, text_data):
-        event = json.loads(text_data)
-        event_type = event.get('type', None)
-        print(event)
+        data = json.loads(text_data)
+        event_type = data.get('type', None)
+
         if event_type == "fetch_messages":
             return
 
         else:
-            await self.create_message(data=event)
-            messages = await self.get_messages(event['room_id'], event["user_id"])
-            user = await self.get_user(event["user_id"])
-            await self.send_all_messages(event['room_id'])
-            if not user:
-                await self.send(text_data=json.dumps({"error": "User not found"}))
-                return
+            # Create message and broadcast it
+            await self.create_message(data)
+            await self.broadcast_message(data)
 
-            messages_list = [
-                {
-                    "id": message["id"],
-                    "message": message["message"],
-                    "timestamp": message["timestamp"].strftime('%Y-%m-%d %H:%M:%S'),
-                    "user_name": user["user_name"],
-                    "user_image": "/media/" + user["user_image"]
-                }
-                for message in messages
-            ]
-
-            await self.send(text_data=json.dumps({"messages": messages_list}))
-
-    async def send_all_messages(self, room_id):
-        messages = await self.get_all_messages_in_room(room_id)
-
-        if isinstance(messages, str):
-            await self.send(text_data=json.dumps({"error": messages}))
-        else:
-            await self.send(text_data=json.dumps({"messages": messages}))
+    async def chat_message(self, event):
+        await self.send(text_data=json.dumps(event))
 
     @database_sync_to_async
     def create_message(self, data):
@@ -76,16 +50,34 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         return message
 
-    async def broadcast_message(self, message):
+    async def broadcast_message(self, data):
+        messages = await self.get_all_messages_in_room(data['room_id'])
+        user = await self.get_user(data["user_id"])
+
+        if not user:
+            await self.send(text_data=json.dumps({"error": "User not found"}))
+            return
+
+        messages_list = [
+            {
+                "id": message["id"],
+                "message": message["message"],
+                "timestamp": message["timestamp"],
+                "user_name": user["user_name"],
+                "user_image": "/media/" + user["user_image"]
+            }
+            for message in messages
+        ]
+
+        # Improve this code by sending only the new message to the
+        # client instead of fetching all messages when a new message is created, 
+
+        # Use group_send to broadcast new message to all connected clients
         await self.channel_layer.group_send(
-            self.room_name,
+            self.room_group_name,
             {
                 "type": "chat.message",
-                "message": message.message,
-                "timestamp": message.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                "user_name": message.user.user_name,
-                "user_image": "/media/" + message.user.user_image.url if message.user.user_image else None,
-                "id": message.id
+                "messages": messages_list
             }
         )
 
@@ -117,7 +109,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 for message in member_messages:
                     message_data = {
                         "message": message.message,
-
                         "timestamp": message.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                         "user_name": user_name,
                         "user_image": user_image,

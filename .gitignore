@@ -1,0 +1,14 @@
+
+venv/
+.history/
+__pycache__/
+.idea/
+.vscode/
+setup.cfg
+.env
+.coverage
+htmlcov
+/logs/
+**/logs/**
+docker-compose.test.yaml
+local-test
